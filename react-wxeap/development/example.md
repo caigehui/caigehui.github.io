@@ -47,105 +47,46 @@ export function fetchList({ selectedIndex, page }) {
 在`models`文件夹下创建`tasksList.js`
 
 ```js
-//models/tasksList.js
 import { fetchList } from '../services/tasksList';
 import { PAGE_SIZE } from '../constants';
+
+
 export default {
   namespace: 'tasksList',
   state: {
-    selectedIndex: 0,//状态选择
-    list: [],//列表数据
-    isLoading: true,//是否正在进行网络请求
-    page: 1,//当前页数
-    refreshing: true,//刷新控件是否正在刷新
-    allLoaded: false//是否全部加载完毕
+    selectedIndex: 0,/**当前条件（0-未完成，1-已完成） */
+    tasks: []/**当前已经获取到的任务 */
   },
   reducers: {
-    //保存状态reducer,通常save能满足大部分业务需求
     save(state, { payload }) {
       return { ...state, ...payload }
     },
   },
   effects: {
-    //初始化的方法，当路由到此视图、用户强制刷新或者切换任务状态筛选时，会调用此方法
-    *initFetch({ payload: { selectedIndex: index } }, { call, put, select }) {
+    *fetch({ payload: { page, fill } }, { call, put, select }) {
       try {
-        //获取当前的state
-        const tasksListStates = yield select(state => state.tasksList);
-        //过滤传入的selectedIndex
-        const selectedIndex = index == undefined ? tasksListStates.selectedIndex : index;
-        //初始化state，设置状态为加载中
-        yield put({
-          type: 'save',
-          payload: {
-            list: [],
-            selectedIndex,
-            isLoading: true,
-            refreshing: true,
-            page: 1,
-            allLoaded: false
-          }
-        })
-        //抓取列表数据
-        const { data, err } = yield call(fetchList, { selectedIndex, page: 1 });
-        //为了防止程序崩溃，如果发生服务器错误，直接返回，底层会自动输出错误信息
-        if (err) return;
-        //保存列表数据，翻转刷新状态
-        yield put({
-          type: 'save',
-          payload: {
-            list: data.tasks,
-            isLoading: false,
-            refreshing: false
-          }
-        })
-      } catch (err) {
-        console.error('taskDetail/initFetch:', err);
-      }
-    },
-    //“加载更多”调用的方法
-    *fetch({ payload: { page } }, { call, put, select }) {
-      try {
-        //设置加载状态，更新当前页数
-        yield put({
-          type: 'save',
-          payload: {
-            isLoading: true,
-            page
-          }
-        })
-        //获取当前的任务状态和列表数据
-        const { selectedIndex, list } = yield select(state => state.tasksList);
-        //抓取列表数据
-        const { data, err } = yield call(fetchList, { selectedIndex, page });
-        if (err) return;
-        //拼接上新获取的数据，如果新获取的数据长度小于"PAGE_SIZE"，代表已经全部加载
-        yield put({
-          type: 'save',
-          payload: {
-            isLoading: false,
-            list: [...list, ...data.tasks],
-            allLoaded: data.tasks.length < PAGE_SIZE ? true : false
-          }
-        })
-        console.log('ferchMore, page: ', page)
-      }
-      catch (err) {
-        console.error('taskDetail/fetch:', err);
+        /**获取当前条件（未完成，已完成），和已经获取的任务 */
+        const { selectedIndex, tasks } = yield select(state => state.tasksList);
+        /**根据当前页数和状态获取任务 */
+        const { data, err } = yield call(fetchList, { selectedIndex, page })
+        if(err) return
+        /**组织新的任务列表，如果页数是1，代表刷新列表，否则拼接上原来的数据 */
+        let newTasks = (page === 1 ? data.tasks : [...tasks, ...data.tasks]);
+        /**保存新的任务 */
+        yield put({ type: 'save', payload: { tasks: newTasks }})
+        /**填充数据到列表，包括是否加载完成 */
+        yield call(fill, newTasks, data.tasks.length < PAGE_SIZE ? true : false)
+      } catch (msg) {
+        console.warn(msg);
       }
     },
   },
   subscriptions: {
-    //初始化
     setup({ dispatch, history }) {
-      return history.listen(({ pathname, query }) => {
-        if (pathname === '/') {
-          dispatch({ type: 'initFetch', payload: query });
-        }
-      });
     },
   },
 };
+
 ```
 
 <a id="4"/>
@@ -154,19 +95,21 @@ export default {
 在`Routes`文件夹下新建一个TasksList.js，路由一般首字母大写
 ```jsx
 import React from 'react';
-import { HEIGHT, WIDTH, routerRedux, connect } from 'react-wxeap-mobile';
+import {
+  ListView,
+  routerRedux,
+  bind
+} from 'react-wxeap';
 import { PAGE_SIZE } from '../constants'
 import {
   SegmentedControl,
   WingBlank,
   List,
-  ListView,
   RefreshControl
 } from 'antd-mobile';
 const Item = List.Item;
 const Brief = Item.Brief;
 
-//创建内联样式
 const styles = {
   container: {
     backgroundColor: '#fff'
@@ -174,91 +117,46 @@ const styles = {
   wingBlank: {
     paddingTop: 30,
     paddingBottom: 30
-  },
-  listView: {
-    height: HEIGHT * 11 / 12,
-    width: WIDTH,
-  },
-  loading: {
-    marginTop: 10,
-    width: 40,
-    height: 40
-  },
-  footer: {
-    padding: 30,
-    textAlign: 'center'
   }
 }
 
 
 class TasksList extends React.Component {
 
-  //初始化
-  constructor(props) {
-    super(props);
-    const dataSource = new ListView.DataSource({
-      rowHasChanged: (row1, row2) => row1 !== row2,
-    });
-    //把列表数据填充到state
-    this.state = {
-      dataSource: dataSource.cloneWithRows([]),
-    }
+  onFetch = (page, fill) => {
+    this.props.dispatch({
+      type: 'tasksList/fetch',
+      payload: { page, fill }
+    })
   }
 
-  //列表数据发生变化，更新state
-  componentWillReceiveProps(nextProps) {
-    if (nextProps.dataSource !== this.props.dataSource) {
-      this.setState({
-        dataSource: this.state.dataSource.cloneWithRows(nextProps.dataSource),
-      });
-    }
-  }
-
-  //当列表滑到最低端调用
-  onEndReached = () => {
-    const { isLoading, allLoaded } = this.props;
-    //当正在加载时不响应该方法
-    if (!isLoading && !allLoaded) {
-      this.props.dispatch({
-        type: 'tasksList/fetch', payload: {
-          page: this.props.page + 1
-        }
-      })
-    }
-  }
-
-  //触发下拉刷新
-  onRefresh = () => {
-    const { refreshing } = this.props;
-    if (!refreshing) {
-      this.props.dispatch({
-        type: 'tasksList/initFetch',
-        payload: {}
-      })
-    }
-  }
-
-  //筛选状态更改
   onIndexChange = e => {
-    this.props.dispatch({ type: 'tasksList/initFetch', payload: { selectedIndex: e.nativeEvent.selectedSegmentIndex } })
+    this.props.dispatch({ type: 'tasksList/save', payload: { selectedIndex: e.nativeEvent.selectedSegmentIndex } })
+    this.listView.reload();
   }
 
-
-  //点击了某一列表项
   onItemClick = (rowData) => {
     const { taskId, taskTitle, taskDate, taskEquipNum } = rowData;
+    const { dataSource } = this.props;
+    let taskIds = "";
+    dataSource.map((item, index) => {
+      taskIds += item.taskId
+      if (index !== dataSource.length - 1) {
+        taskIds += ","
+      }
+    })
     this.props.dispatch(routerRedux.push({
       pathname: '/TaskDetail',
       query: {
         taskId,
-        taskTitle
+        taskTitle,
+        taskIds
       }
     }))
   }
 
-  //根据数字获取状态名
   getTaskStateString = (taskState) => {
-    switch(taskState) {
+    switch (taskState) {
       case 0: return '未开始'
       case 1: return '进行中'
       case 2: return '已完成'
@@ -267,42 +165,25 @@ class TasksList extends React.Component {
   }
 
   render() {
-    const { dispatch, selectedIndex, isLoading, refreshing, allLoaded } = this.props;
-    //渲染每一行
-    const row = (rowData, sectionID, rowID) =>
+    const { dispatch, selectedIndex } = this.props;
+    const renderRow = (rowData, sectionID, rowID) =>
       <Item key={rowID} arrow="horizontal" thumb={require('../assets/taskEquip.png')} multipleLine onClick={() => this.onItemClick(rowData)}>
-        {rowData.taskTitle} <Brief>{rowData.taskDate+`    `+this.getTaskStateString(rowData.taskState)+`    `+rowData.taskEquipNum}</Brief>
+        {rowData.taskTitle} <Brief>{rowData.taskDate + `    ` + this.getTaskStateString(rowData.taskState) + `    ` + rowData.taskEquipNum}</Brief>
       </Item>
 
     return (
-      <div style={styles.container}>
+      <div style={styles.container} >
         <WingBlank size="lg" style={styles.wingBlank}>
           <SegmentedControl values={['未完成', '已完成']} selectedIndex={selectedIndex} onChange={this.onIndexChange} />
         </WingBlank>
-        <div>
-          <ListView
-            ref="lv"
-            style={styles.listView}
-            dataSource={this.state.dataSource}
-            initialListSize={0}
-            renderHeader={() => <span>巡检任务列表</span>}
-            renderFooter={() =>
-              <div style={styles.footer}>
-                {allLoaded ? '没有更多了' : isLoading ? '加载中...' : '加载完毕'}
-              </div>}
-            renderRow={row}
-            pageSize={PAGE_SIZE}
-            scrollRenderAheadDistance={0}
-            scrollEventThrottle={20}
-            onEndReached={this.onEndReached}
-            onEndReachedThreshold={30}
-            refreshControl={<RefreshControl
-              refreshing={refreshing}
-              onRefresh={this.onRefresh}/>}
-            />}
-          />
-        </div>
-      </div>
+        <ListView
+          ref={o => this.listView = o}
+          header="巡检任务列表"
+          renderRow={renderRow}
+          pageSize={PAGE_SIZE}
+          onFetch={this.onFetch} />}
+          />}/>
+      </div >
 
     );
   }
@@ -318,25 +199,38 @@ const mapStateToProps = state => {
   };
 }
 
-export default connect(mapStateToProps)(TasksList);
+export default bind(mapStateToProps)(TasksList);
 ```
 
 **在入口文件index.js修改配置**
 ```js
-import { App } from 'react-wxeap-mobile';
-import './index.css';
+import { MobileApp } from 'react-wxeap';
 
-App([
+let routes = [
   {
+    name: 'TasksList',
     path: '/',
     model: require('./models/tasksList'),
     component: require('./routes/TasksList')
+  },
+  {
+    name: 'TaskDetail',
+    path: '/TaskDetail',
+    model: require('./models/taskDetail'),
+    component: require('./routes/TaskDetail'),
+    createForm: true
   }
-])({
+];
+
+let options = {
   module: 'wxcsm',
   origin: 'http://192.168.0.92/WxSoft.EAP',
   auth: '/WxLoginIF.aspx?EmpNo=sy&EmpPassword=111111'
-})
+}
+
+const app = new MobileApp(routes, options);
+
+app.start();
 ```
 
 <a id="5"/>
