@@ -1,0 +1,1 @@
+webpackJsonp([4],{"YWI+":function(e,t,n){"use strict";Object.defineProperty(t,"__esModule",{value:!0});var c=n("GiK3"),a=n.n(c),o=n("IRSK"),i=n("S6G3"),p=(n.n(i),a.a.createElement("div",null));t.default=Object(o.a)(Object(i.connect)(),Object(o.c)({componentDidMount:function(){this.props.dispatch({type:"app/setLightHeader",payload:!1})}}))(function(){return p})}});
